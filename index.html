@@ -365,17 +365,16 @@
   <div class="footer">
     Dados gerados por IA com base no estado actual dos mercados.<br>
     Actualização automática a cada hora · Não constitui aconselhamento financeiro.<br><br>
-    Inspirado no <em>Fogueiro's Toolbox</em> — geotime.no.sapo.pt (2007–2017)
+    Inspirado no <em>Fogueiro's Toolbox</em> — geotime.no.sapo.pt (2007–2017)<br><br>
+    <button class="btn" onclick="localStorage.removeItem('anthropic_key');alert('API key removida.');" style="font-size:10px;padding:4px 10px;opacity:0.6;">🔑 Remover API key guardada</button>
   </div>
 
 </div><!-- /container -->
 
 <script>
-// ─── CONFIG ────────────────────────────────────────────────
-// Cola aqui a tua API key da Anthropic:
-// https://console.anthropic.com/settings/keys
-const ANTHROPIC_API_KEY = "COLOCA_AQUI_A_TUA_API_KEY";
-// ───────────────────────────────────────────────────────────
+function getApiKey() {
+  return localStorage.getItem('anthropic_key') || '';
+}
 
 function todayStr() {
   return new Date().toLocaleDateString('pt-PT', {
@@ -429,10 +428,15 @@ function renderYieldCurve(tenores) {
 }
 
 async function loadAll() {
-  if (!ANTHROPIC_API_KEY || ANTHROPIC_API_KEY === 'COLOCA_AQUI_A_TUA_API_KEY') {
-    setStatus('error', 'API key em falta');
-    document.getElementById('mp-ai').textContent = '⚠ Abre o ficheiro HTML num editor de texto e substitui COLOCA_AQUI_A_TUA_API_KEY pela tua chave da Anthropic (console.anthropic.com).';
-    return;
+  let ANTHROPIC_API_KEY = getApiKey();
+  if (!ANTHROPIC_API_KEY) {
+    ANTHROPIC_API_KEY = prompt('Insere a tua API key da Anthropic (console.anthropic.com/settings/keys):\n\nA key começa com sk-ant-...\nFica guardada só no teu browser, nunca é enviada para outro sítio.');
+    if (!ANTHROPIC_API_KEY || !ANTHROPIC_API_KEY.startsWith('sk-')) {
+      setStatus('error', 'API key inválida ou cancelada');
+      document.getElementById('mp-ai').textContent = '⚠ API key necessária. Clica em "Actualizar" para inserires a tua chave da Anthropic.';
+      return;
+    }
+    localStorage.setItem('anthropic_key', ANTHROPIC_API_KEY);
   }
 
   const ri = document.getElementById('ri');
