@@ -555,6 +555,663 @@ Analisa o estado ACTUAL dos mercados financeiros e devolve um JSON com EXACTAMEN
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 1500,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+
+    const data = await res.json();
+    let raw = '';
+    for (const b of (data.content || [])) { 
+      if (b.type === 'text') raw += b.text;
+      // handle tool_result blocks
+      if (b.type === 'tool_result' && Array.isArray(b.content)) {
+        for (const c of b.content) { if (c.type === 'text') raw += c.text; }
+      }
+    }
+    // Extract JSON - find first { and last }
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    let clean = raw;
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      clean = raw.substring(firstBrace, lastBrace + 1);
+    } else {
+      clean = raw.replace(/```json|```/g, '').trim();
+    }
+    const d = JSON.parse(clean);
+
+    // MÉDIO PRAZO
+    const mpPos = d.mp.positivos >= 3;
+    applyMaster('mp-master', 'mp-val', 'mp-detail', d.mp.status, d.mp.positivos + '/5 índices positivos');
+    applyBadge('mp-badge', d.mp.positivos + '/5');
+    document.getElementById('mp-badge').textContent = d.mp.positivos + '/5';
+    document.getElementById('mp-badge').className = 'badge ' + (mpPos ? 'pos' : 'neg');
+    renderIdxGrid('mp-grid', d.mp.indices);
+    document.getElementById('mp-ai').textContent = d.mp.ai_note;
+
+    // LONGO PRAZO
+    applyMaster('lp-master', 'lp-val', 'lp-detail', d.lp.status,
+      d.lp.indices.filter(i => i.pos).length + '/2 acima das médias semanais');
+    renderIdxGrid('lp-grid', d.lp.indices);
+    document.getElementById('lp-ai').textContent = d.lp.ai_note;
+
+    // 2 SEGUNDOS
+    const nl = d.dois_segundos.new_lows;
+    const dois = document.getElementById('dois-val');
+    dois.textContent = nl;
+    dois.style.color = nl < 40 ? 'var(--pos)' : '#d85a30';
+    const pct = Math.min(100, (nl / 150) * 100);
+    document.getElementById('dois-bar').style.width = pct + '%';
+    document.getElementById('dois-bar').style.background = nl < 40 ? 'var(--pos)' : '#d85a30';
+    applyBadge('dois-badge', d.dois_segundos.status);
+    document.getElementById('dois-desc').textContent = d.dois_segundos.desc;
+
+    // AJUSTE FINO
+    const af = d.ajuste_fino;
+    applyBadge('af-badge', af.status);
+    const nomes = ['S&P 500', 'NYSE', 'Nasdaq', 'S&P 600', 'ML Tech'];
+    document.getElementById('af-grid').innerHTML = nomes.map((nm, i) => {
+      const up = i < af.mm25_inclinadas_cima;
+      return `<div class="af-row">
+        <span class="af-arrow" style="color:${up ? 'var(--pos)' : '#d85a30'}">${up ? '↑' : '↓'}</span>
+        <span style="color:var(--text-muted);flex:1;">${nm}</span>
+        <span style="font-size:11px;color:${up ? 'var(--pos)' : '#d85a30'};font-weight:500;">${up ? 'cima' : 'baixo'}</span>
+      </div>`;
+    }).join('');
+    document.getElementById('af-desc').textContent = af.desc;
+
+    // VOLUME BLAST-OFF
+    const vbo = d.volume_blastoff;
+    applyBadge('vbo-badge', vbo.badge);
+    document.getElementById('vbo-ratio').textContent = parseFloat(vbo.ratio_hoje).toFixed(1) + ':1';
+    document.getElementById('vbo-days').textContent = vbo.dias_9_1_ultimo_mes;
+    const vsig = document.getElementById('vbo-signal');
+    vsig.textContent = vbo.signal_activo ? '✓ SIM' : '✗ NÃO';
+    vsig.style.color = vbo.signal_activo ? 'var(--pos)' : '#d85a30';
+    document.getElementById('vbo-ai').textContent = vbo.ai_note;
+
+    // YIELD CURVE
+    renderYieldCurve(d.yield_curve.tenores);
+    applyBadge('yc-badge', d.yield_curve.invertida ? 'INVERTIDA' : d.yield_curve.badge);
+    document.getElementById('yc-ai').textContent = d.yield_curve.ai_note;
+
+    // DESTAQUES
+    renderIdxGrid('dest-grid', d.destaques);
+    document.getElementById('dest-ai').textContent = d.dest_ai;
+
+    setStatus('ok', 'Actualizado às ' + new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }));
+
+  } catch (e) {
+    console.error(e);
+    setStatus('error', 'Erro — tenta novamente');
+    document.getElementById('mp-ai').textContent = 'Erro ao carregar dados: ' + e.message;
+  }
+
+  ri.className = '';
+  ri.textContent = '↻';
+}
+
+// Arranque
+document.getElementById('ft-date').textContent = todayStr();
+loadAll();
+</script>
+</body>
+</html><!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="3600">
+<title>Fogueiro's Toolbox — Sentimento de Mercado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f4f0;
+    --surface: #ffffff;
+    --surface2: #f0ede6;
+    --border: rgba(0,0,0,0.12);
+    --border-strong: rgba(0,0,0,0.22);
+    --text: #1a1a18;
+    --text-muted: #666660;
+    --pos: #0f6e56;
+    --pos-bg: #e1f5ee;
+    --neg: #993c1d;
+    --neg-bg: #faece7;
+    --neu: #5f5e5a;
+    --neu-bg: #f1efe8;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #18181600;
+      --surface: #242420;
+      --surface2: #2e2e2a;
+      --border: rgba(255,255,255,0.1);
+      --border-strong: rgba(255,255,255,0.2);
+      --text: #f0ede6;
+      --text-muted: #9a9992;
+      --pos: #5dcaa5;
+      --pos-bg: #04342c;
+      --neg: #f0997b;
+      --neg-bg: #4a1b0c;
+      --neu: #b4b2a9;
+      --neu-bg: #2c2c2a;
+    }
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+
+  .container { max-width: 880px; margin: 0 auto; }
+
+  /* HEADER */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--text);
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .header-left {}
+  .site-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  .site-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 1px;
+  }
+  .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .date-txt { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted); }
+
+  /* BUTTONS */
+  .btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 6px 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--surface2); }
+  .btn:active { transform: scale(0.98); }
+
+  /* MASTER INDICATOR */
+  .master {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-radius: var(--radius);
+    margin-bottom: 0.75rem;
+    transition: background 0.3s;
+  }
+  .master.pos { background: var(--pos); color: #fff; }
+  .master.neg { background: #d85a30; color: #fff; }
+  .master.neu { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .master-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; margin-bottom: 3px; }
+  .master-value { font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 600; }
+  .master-detail { font-size: 12px; opacity: 0.85; text-align: right; max-width: 200px; line-height: 1.5; }
+
+  /* SECTION CARD */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1rem;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .card-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .card-body { padding: 1rem; }
+
+  /* BADGE */
+  .badge {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+  }
+  .badge.pos { background: var(--pos-bg); color: var(--pos); }
+  .badge.neg { background: var(--neg-bg); color: var(--neg); }
+  .badge.neu { background: var(--neu-bg); color: var(--neu); }
+
+  /* INDEX GRID */
+  .idx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .idx-card { background: var(--surface2); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .idx-name { font-size: 11px; color: var(--text-muted); margin-bottom: 5px; line-height: 1.3; }
+  .idx-status { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; }
+  .idx-status.pos { color: var(--pos); }
+  .idx-status.neg { color: #d85a30; }
+  .idx-mm { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  /* AI NOTE */
+  .ai-note {
+    margin-top: 0.75rem;
+    padding: 0.65rem 0.9rem;
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.65;
+    font-style: italic;
+    border-left: 3px solid var(--border-strong);
+  }
+
+  /* TWO COLUMN */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 1rem; }
+  @media (max-width: 560px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* GAUGE */
+  .gauge-big { font-family: 'IBM Plex Mono', monospace; font-size: 36px; font-weight: 600; line-height: 1; }
+  .gauge-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .score-bar { height: 5px; background: var(--surface2); border-radius: 3px; margin: 8px 0; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+
+  /* AF ROWS */
+  .af-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; }
+  .af-arrow { font-size: 14px; width: 18px; text-align: center; }
+
+  /* BLAST ROWS */
+  .blast-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .blast-row:last-child { border-bottom: none; }
+  .blast-name { flex: 1; color: var(--text-muted); }
+  .blast-val { font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+
+  /* YIELD CURVE */
+  .yield-wrap { margin: 4px 0 6px; }
+  .yield-bars { display: flex; align-items: flex-end; gap: 5px; height: 64px; }
+  .ybar { flex: 1; border-radius: 3px 3px 0 0; min-height: 4px; transition: height 0.4s; }
+  .yield-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace; margin-top: 4px; }
+
+  /* FOOTER */
+  .footer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 2rem; line-height: 1.7; padding-bottom: 2rem; }
+  .footer a { color: var(--text-muted); }
+
+  /* LOADING */
+  .loading { font-size: 12px; color: var(--text-muted); font-style: italic; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 0.8s linear infinite; display: inline-block; }
+
+  /* STATUS BAR */
+  .status-bar {
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+    color: var(--text-muted); margin-top: 6px;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #1d9e75; }
+  .status-dot.loading { background: #ef9f27; animation: spin 1s linear infinite; border-radius: 0; }
+  .status-dot.error { background: #d85a30; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="site-title">Fogueiro's Toolbox</div>
+      <div class="site-sub">SENTIMENTO DE MERCADO</div>
+    </div>
+    <div class="header-right">
+      <div class="date-txt" id="ft-date">—</div>
+      <button class="btn" onclick="loadAll()">
+        <span id="ri">↻</span> Actualizar
+      </button>
+      <div class="status-bar">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-txt">Pronto</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MÉDIO PRAZO MASTER -->
+  <div class="master neu" id="mp-master">
+    <div>
+      <div class="master-label">Indicador de Médio Prazo</div>
+      <div class="master-value" id="mp-val">A CARREGAR…</div>
+    </div>
+    <div class="master-detail" id="mp-detail">—</div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">5 Índices — MM25 / MM50</span>
+      <span class="badge neu" id="mp-badge">—</span>
+    </div>
+    <div class="card-body">
+      <div class="idx-grid" id="mp-grid"><div class="loading">A carregar…</div></div>
+      <div class="ai-note" id="mp-ai">—</div>
+    </div>
+  </div>
+
+  <!-- LONGO PRAZO MASTER -->
+  <div class="master neu" id="lp-master">
+    <div>
+      <div class="master-label">Indicador de Longo Prazo</div>
+      <div class="master-value" id="lp-val">A CARREGAR…</div>
+    </div>
+    <div class="master-detail" id="lp-detail">—</div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">2 Índices — Médias Semanais</span>
+    </div>
+    <div class="card-body">
+      <div class="idx-grid" id="lp-grid"><div class="loading">A carregar…</div></div>
+      <div class="ai-note" id="lp-ai">—</div>
+    </div>
+  </div>
+
+  <!-- 2 SEGUNDOS + AJUSTE FINO -->
+  <div class="two-col">
+    <div class="card" style="margin-bottom:0;">
+      <div class="card-head">
+        <span class="card-title">Indicador 2"</span>
+        <span class="badge neu" id="dois-badge">—</span>
+      </div>
+      <div class="card-body">
+        <div style="margin-bottom:10px;">
+          <div class="gauge-big" id="dois-val">—</div>
+          <div class="gauge-sub">New Lows NYSE</div>
+          <div class="score-bar"><div class="score-fill" id="dois-bar" style="width:0%;"></div></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.6;" id="dois-desc">—</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:0;">
+      <div class="card-head">
+        <span class="card-title">Ajuste Fino MM25</span>
+        <span class="badge neu" id="af-badge">—</span>
+      </div>
+      <div class="card-body">
+        <div id="af-grid" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;"></div>
+        <div style="font-size:11px;color:var(--text-muted);line-height:1.5;" id="af-desc">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VOLUME BLAST-OFF -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Volume Blast-Off (NYUPV/NYDNV)</span>
+      <span class="badge neu" id="vbo-badge">—</span>
+    </div>
+    <div class="card-body">
+      <div class="blast-row">
+        <span class="blast-name">Rácio Up/Down Volume (hoje)</span>
+        <span class="blast-val" id="vbo-ratio">—</span>
+      </div>
+      <div class="blast-row">
+        <span class="blast-name">Dias ≥ 9:1 no último mês</span>
+        <span class="blast-val" id="vbo-days">—</span>
+      </div>
+      <div class="blast-row">
+        <span class="blast-name">Sinal Blast-Off activo</span>
+        <span class="blast-val" id="vbo-signal">—</span>
+      </div>
+      <div class="ai-note" id="vbo-ai">—</div>
+    </div>
+  </div>
+
+  <!-- YIELD CURVE -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Dynamic Yield Curve (US Treasury)</span>
+      <span class="badge neu" id="yc-badge">—</span>
+    </div>
+    <div class="card-body">
+      <div class="yield-wrap">
+        <div class="yield-bars" id="yc-bars"></div>
+        <div class="yield-labels" id="yc-labels"></div>
+      </div>
+      <div class="ai-note" id="yc-ai">—</div>
+    </div>
+  </div>
+
+  <!-- MERCADOS EM DESTAQUE -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Mercados em Destaque</span>
+    </div>
+    <div class="card-body">
+      <div class="idx-grid" id="dest-grid"><div class="loading">A carregar…</div></div>
+      <div class="ai-note" id="dest-ai">—</div>
+    </div>
+  </div>
+
+  <!-- API KEY SETUP PANEL -->
+  <div id="key-panel" style="display:none; background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius); padding:1.25rem; margin-bottom:1rem;">
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">🔑 API Key da Anthropic</div>
+    <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; line-height:1.6;">
+      Para carregar os dados precisas de uma API key gratuita.<br>
+      Cria uma em <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--pos);">console.anthropic.com/settings/keys</a>
+    </p>
+    <div style="display:flex; gap:8px;">
+      <input type="password" id="key-input" placeholder="sk-ant-api03-..." 
+        style="flex:1; font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px 12px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); background:var(--surface2); color:var(--text);">
+      <button class="btn" onclick="saveKey()" style="white-space:nowrap;">Guardar e carregar</button>
+    </div>
+  </div>
+
+  <div class="footer">
+    Dados gerados por IA com base no estado actual dos mercados.<br>
+    Actualização automática a cada hora · Não constitui aconselhamento financeiro.<br><br>
+    Inspirado no <em>Fogueiro's Toolbox</em> — geotime.no.sapo.pt (2007–2017)<br><br>
+    <button class="btn" onclick="clearKey()" style="font-size:10px;padding:4px 10px;opacity:0.6;">🔑 Remover API key guardada</button>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+function getApiKey() {
+  return localStorage.getItem('anthropic_key') || '';
+}
+
+function saveKey() {
+  const val = document.getElementById('key-input').value.trim();
+  if (!val.startsWith('sk-')) {
+    document.getElementById('key-input').style.borderColor = '#d85a30';
+    return;
+  }
+  localStorage.setItem('anthropic_key', val);
+  document.getElementById('key-panel').style.display = 'none';
+  loadAll();
+}
+
+function clearKey() {
+  localStorage.removeItem('anthropic_key');
+  document.getElementById('key-panel').style.display = 'block';
+  setStatus('error', 'API key removida');
+}
+
+// Allow Enter key in input
+document.addEventListener('DOMContentLoaded', function() {
+  const input = document.getElementById('key-input');
+  if (input) input.addEventListener('keydown', function(e) { if (e.key === 'Enter') saveKey(); });
+});
+
+function todayStr() {
+  return new Date().toLocaleDateString('pt-PT', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+
+function setStatus(state, txt) {
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot' + (state === 'loading' ? ' loading' : state === 'error' ? ' error' : '');
+  document.getElementById('status-txt').textContent = txt;
+}
+
+function renderIdxGrid(id, items) {
+  document.getElementById(id).innerHTML = items.map(i => `
+    <div class="idx-card">
+      <div class="idx-name">${i.name}</div>
+      <div class="idx-status ${i.pos ? 'pos' : 'neg'}">${i.pos ? 'POSITIVO' : 'NEGATIVO'}</div>
+      <div class="idx-mm">${i.mm}</div>
+    </div>
+  `).join('');
+}
+
+function applyMaster(masterId, valId, detailId, status, detail) {
+  const el = document.getElementById(masterId);
+  const isPos = status === 'POSITIVO';
+  const isNeg = status === 'NEGATIVO';
+  el.className = 'master ' + (isPos ? 'pos' : isNeg ? 'neg' : 'neu');
+  document.getElementById(valId).textContent = status;
+  if (detailId) document.getElementById(detailId).textContent = detail || '';
+}
+
+function applyBadge(id, status) {
+  const el = document.getElementById(id);
+  const isPos = status === 'POSITIVO' || status === 'NORMAL' || status === 'ACTIVO';
+  const isNeg = status === 'NEGATIVO' || status === 'INVERTIDA';
+  el.textContent = status;
+  el.className = 'badge ' + (isPos ? 'pos' : isNeg ? 'neg' : 'neu');
+}
+
+function renderYieldCurve(tenores) {
+  const rates = tenores.map(t => t.rate);
+  const max = Math.max(...rates);
+  const colors = ['#B5D4F4','#85B7EB','#378ADD','#185FA5','#378ADD','#1D9E75','#0F6E56','#085041'];
+  const bars = document.getElementById('yc-bars');
+  const labels = document.getElementById('yc-labels');
+  bars.innerHTML = tenores.map((t, i) =>
+    `<div class="ybar" style="height:${Math.max(4, (t.rate / max) * 58)}px;background:${colors[i % colors.length]}" title="${t.tenor}: ${t.rate}%"></div>`
+  ).join('');
+  labels.innerHTML = `<span>${tenores[0].tenor}</span><span>${tenores[Math.floor(tenores.length / 2)].tenor}</span><span>${tenores[tenores.length - 1].tenor}</span>`;
+}
+
+async function loadAll() {
+  let ANTHROPIC_API_KEY = getApiKey();
+  if (!ANTHROPIC_API_KEY) {
+    document.getElementById('key-panel').style.display = 'block';
+    setStatus('error', 'API key necessária');
+    return;
+  }
+  document.getElementById('key-panel').style.display = 'none';
+
+  const ri = document.getElementById('ri');
+  ri.className = 'spin';
+  setStatus('loading', 'A carregar dados…');
+  document.getElementById('ft-date').textContent = todayStr();
+
+  const today_iso = new Date().toISOString().split('T')[0];
+
+  const prompt = `Hoje é ${today_iso}. És um analista financeiro sénior de análise técnica.
+
+Analisa o estado ACTUAL dos mercados financeiros e devolve um JSON com EXACTAMENTE esta estrutura. Sem markdown, sem texto extra — apenas JSON válido:
+
+{
+  "mp": {
+    "indices": [
+      {"name":"S&P 500","pos":true,"mm":"MM25 ↑"},
+      {"name":"NYSE Composite","pos":true,"mm":"MM25 ↑"},
+      {"name":"Nasdaq Composite","pos":true,"mm":"MM25 ↑"},
+      {"name":"S&P 600 Small Caps","pos":true,"mm":"MM25 ↑"},
+      {"name":"ML Technology 100","pos":true,"mm":"MM25 ↑"}
+    ],
+    "positivos": 5,
+    "status": "POSITIVO",
+    "ai_note": "Frase curta sobre o estado técnico de médio prazo."
+  },
+  "lp": {
+    "indices": [
+      {"name":"S&P 500","pos":true,"mm":"Acima MM semanal"},
+      {"name":"ML Technology 100","pos":true,"mm":"Acima MM semanal"}
+    ],
+    "status": "POSITIVO",
+    "ai_note": "Frase curta sobre tendência de longo prazo."
+  },
+  "dois_segundos": {
+    "new_lows": 12,
+    "status": "NEGATIVO",
+    "desc": "Interpretação breve do indicador 2 segundos."
+  },
+  "ajuste_fino": {
+    "status": "POSITIVO",
+    "mm25_inclinadas_cima": 4,
+    "desc": "Ajuste fino baseado na inclinação das MM25."
+  },
+  "volume_blastoff": {
+    "ratio_hoje": 2.3,
+    "dias_9_1_ultimo_mes": 0,
+    "signal_activo": false,
+    "badge": "NEUTRO",
+    "ai_note": "Breve análise do volume de mercado."
+  },
+  "yield_curve": {
+    "invertida": false,
+    "badge": "NORMAL",
+    "tenores": [
+      {"tenor":"1M","rate":5.3},{"tenor":"3M","rate":5.25},{"tenor":"6M","rate":5.1},
+      {"tenor":"1Y","rate":4.9},{"tenor":"2Y","rate":4.6},{"tenor":"5Y","rate":4.4},
+      {"tenor":"10Y","rate":4.5},{"tenor":"30Y","rate":4.7}
+    ],
+    "ai_note": "Interpretação da curva de yields actual."
+  },
+  "destaques": [
+    {"name":"FTSE 100","pos":true,"mm":"Tendência positiva"},
+    {"name":"DAX","pos":true,"mm":"Acima das médias"},
+    {"name":"China (FXI)","pos":false,"mm":"Abaixo da MM50"},
+    {"name":"Ouro","pos":true,"mm":"Momentum positivo"},
+    {"name":"Petróleo WTI","pos":false,"mm":"Abaixo da MM25"},
+    {"name":"Dólar (DXY)","pos":true,"mm":"MM25 ↑"}
+  ],
+  "dest_ai": "Contexto macro breve sobre mercados globais hoje."
+}`;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1500,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: prompt }]
       })
